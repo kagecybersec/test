@@ -1,0 +1,8 @@
+# Fichiers de débogage et compilation temporaires
+*.pdb
+*.obj
+*.log
+
+# Fichiers système Windows
+Thumbs.db
+Desktop.ini

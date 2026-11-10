@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vérification Dossier DGTTC - VerifDoc</title>
+    <link rel="stylesheet" href="style.css">
+    <script>
+    // Détection si la page est ouverte directement depuis l'explorateur (file://)
+    if (window.location.protocol === 'file:') {
+        document.addEventListener('DOMContentLoaded', function() {
+            var alerte = document.createElement('div');
+            alerte.style.cssText = 'position:sticky;top:0;left:0;right:0;background:#B91C1C;color:#FFFFFF;padding:14px 20px;text-align:center;font-family:Segoe UI,sans-serif;font-size:14px;z-index:99999;box-shadow:0 4px 10px rgba(0,0,0,0.3);';
+            alerte.innerHTML = '<strong>⚠️ Exécution hors serveur détectée (file://) :</strong> Les fichiers PHP nécessitent un serveur actif pour s\'exécuter. Pour éviter l\'affichage du code brut, lancez Docker (<code>docker-compose up -d</code>) puis accédez à <a href="http://localhost:8085" target="_blank" style="color:#FDE047;font-weight:bold;text-decoration:underline;margin-left:5px;">http://localhost:8085</a>';
+            document.body.prepend(alerte);
+
+            // Redirection automatique des liens vers le serveur Docker local
+            var liens = document.querySelectorAll('a');
+            liens.forEach(function(a) {
+                var href = a.getAttribute('href');
+                if (href && href.indexOf('.php') !== -1) {
+                    var nomPage = href.replace('../', '');
+                    a.setAttribute('href', 'http://localhost:8085/' + nomPage);
+                    a.setAttribute('target', '_self');
+                }
+            });
+        });
+    }
+    </script>
+</head>
+<body>
+
+    <div class="main">
+        <div class="navbar">
+            <div class="menu">
+                <div class="icon">
+                    <h2 class="logo">VerifDoc</h2>
+                </div>
+
+                <ul>
+                    <li><a href="../index.php">Accueil</a></li>
+                    <li><a href="../verifier.php">Vérification</a></li>
+                    <li><a href="../login.php">Connexion</a></li>
+                    <li><a href="../apropos.php">À propos</a></li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="content">
+            <h1><strong>Bienvenue sur la plateforme de <span>vérification de documents</span></strong></h1>
+            <p class="bloc">
+                Bienvenue sur VérifDoc, la plateforme dédiée à la vérification de l'authenticité de vos documents administratifs.<br>
+                Face à la multiplication des documents falsifiés, notre système vous permet d'obtenir une réponse fiable
+                et instantanée<br> grâce à un simple numéro unique d'identification. En quelques secondes, vérifiez 
+                si un document est authentique,<br> détectez les faux, et accédez 
+                aux informations essentielles liées à son titulaire.<br> Une solution simple, rapide et sécurisée, 
+                pensée pour les particuliers comme pour les agents autorisés.
+            </p>
+
+            <div style="margin-left: 20px; margin-top: 20px;">
+                <a href="../verifier.php" style="background-color: #ff7200; color: #fff; padding: 12px 24px; text-decoration: none; font-family: Arial; font-weight: bold; border-radius: 5px; margin-right: 15px; display: inline-block;">
+                    🔍 Accéder à la vérification
+                </a>
+                <a href="../login.php" style="background-color: transparent; border: 2px solid #fff; color: #fff; padding: 10px 20px; text-decoration: none; font-family: Arial; font-weight: bold; border-radius: 5px; display: inline-block;">
+                    👤 Espace Agent
+                </a>
+            </div>
+        </div>
+        <div class="decor"></div>
+    </div>
+
+</body>
+</html>
