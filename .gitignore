@@ -2,6 +2,8 @@
 *.pdb
 *.obj
 *.log
+VerifDoc_old.exe
+data/*.sqlite
 
 # Fichiers système Windows
 Thumbs.db

@@ -19,7 +19,7 @@ if (isset($_GET["export"]) && $_GET["export"] === "csv") {
     fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));
     fputcsv($output, ["ID", "Date et Heure", "Agent", "Numero de Document", "Resultat"], ";");
 
-    $stmt_csv = $pdo->query("SELECT v.id, v.date_verification, CONCAT(a.prenom, ' ', a.nom) AS agent, v.numero_unique_saisi, v.resultat 
+    $stmt_csv = $pdo->query("SELECT v.id, v.date_verification, a.prenom, a.nom, v.numero_unique_saisi, v.resultat 
                              FROM verifications v 
                              JOIN agents a ON v.agent_id = a.id 
                              ORDER BY v.date_verification DESC");
@@ -27,7 +27,7 @@ if (isset($_GET["export"]) && $_GET["export"] === "csv") {
         fputcsv($output, [
             $row["id"],
             date("d/m/Y H:i:s", strtotime($row["date_verification"])),
-            $row["agent"],
+            $row["prenom"] . " " . $row["nom"],
             $row["numero_unique_saisi"],
             $row["resultat"]
         ], ";");

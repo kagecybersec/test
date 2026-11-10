@@ -22,7 +22,7 @@ $nb_verifs = $pdo->query("SELECT COUNT(*) FROM verifications")->fetchColumn();
 $derniers_users = $pdo->query("SELECT id, nom, prenom, email, role, date_creation FROM agents ORDER BY id DESC LIMIT 5")->fetchAll(PDO::FETCH_ASSOC);
 
 // Dernières vérifications d'audit
-$dernieres_verifs = $pdo->query("SELECT v.*, CONCAT(a.prenom, ' ', a.nom) as agent_nom FROM verifications v JOIN agents a ON v.agent_id = a.id ORDER BY v.id DESC LIMIT 5")->fetchAll(PDO::FETCH_ASSOC);
+$dernieres_verifs = $pdo->query("SELECT v.*, a.prenom, a.nom FROM verifications v JOIN agents a ON v.agent_id = a.id ORDER BY v.id DESC LIMIT 5")->fetchAll(PDO::FETCH_ASSOC);
 ?>
 <!DOCTYPE html>
 <html lang="fr">
@@ -187,7 +187,7 @@ $dernieres_verifs = $pdo->query("SELECT v.*, CONCAT(a.prenom, ' ', a.nom) as age
                                 <?php foreach ($dernieres_verifs as $v): ?>
                                     <tr>
                                         <td><?= htmlspecialchars(date("d/m H:i", strtotime($v["date_verification"]))) ?></td>
-                                        <td><?= htmlspecialchars($v["agent_nom"]) ?></td>
+                                        <td><?= htmlspecialchars($v["prenom"] . " " . $v["nom"]) ?></td>
                                         <td><code><?= htmlspecialchars($v["numero_unique_saisi"]) ?></code></td>
                                         <td>
                                             <?php if ($v["resultat"] === "AUTHENTIQUE"): ?>

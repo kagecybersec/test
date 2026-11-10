@@ -2,7 +2,9 @@ using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.IO.Compression;
 using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Threading;
 using System.Windows.Forms;
@@ -11,7 +13,7 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("Application officielle de contrôle et d'authentification des documents administratifs")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("DGTTC")]
-[assembly: AssemblyProduct("VerifDoc Desktop")]
+[assembly: AssemblyProduct("VerifDoc Desktop Autonome")]
 [assembly: AssemblyCopyright("Copyright © 2026 DGTTC. Tous droits réservés.")]
 [assembly: AssemblyTrademark("VerifDoc")]
 [assembly: AssemblyCulture("")]
@@ -23,11 +25,12 @@ namespace VerifDoc
     static class Program
     {
         private const string AppTitle = "VerifDoc - Plateforme de Vérification (DGTTC)";
-        private const string BaseUrl = "http://localhost:8085";
         private const string MutexId = "Global\\VerifDoc_Platform_SingleInstance_App";
-        private static NotifyIcon trayIcon;
-        private static Process browserProcess;
-        private static Icon appIcon;
+        
+        private static string activeUrl = "http://localhost:8085";
+        private static Process phpServerProcess = null;
+        private static NotifyIcon trayIcon = null;
+        private static Icon appIcon = null;
 
         [STAThread]
         static void Main()
@@ -40,41 +43,37 @@ namespace VerifDoc
             {
                 if (!createdNew)
                 {
-                    // L'application tourne déjà en arrière-plan : ouvrir la fenêtre
-                    OpenAppWindow();
+                    // Déjà ouvert : on réveille l'application
+                    OpenBrowserWindow();
                     return;
                 }
 
-                // Chargement de l'icône de l'application
                 LoadAppIcon();
 
-                // 1. Vérification et démarrage automatique du serveur si nécessaire
-                if (!IsServerOnline())
+                // 1. Détection ou démarrage du moteur backend
+                bool serverReady = EnsureServerRunning();
+                if (!serverReady)
                 {
-                    bool serverStarted = ShowSplashAndStartServer();
-                    if (!serverStarted)
-                    {
-                        DialogResult res = MessageBox.Show(
-                            "Le serveur VerifDoc n'est pas encore joignable sur " + BaseUrl + ".\n\n" +
-                            "Souhaitez-vous tenter d'ouvrir l'application quand même ?",
-                            "VerifDoc - Information de connexion",
-                            MessageBoxButtons.YesNo,
-                            MessageBoxIcon.Question
-                        );
-                        if (res != DialogResult.Yes)
-                        {
-                            return;
-                        }
-                    }
+                    MessageBox.Show(
+                        "Impossible d'initialiser le moteur d'exécution VerifDoc.\n" +
+                        "Vérifiez que vous disposez des droits nécessaires pour exécuter des applications.",
+                        AppTitle,
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error
+                    );
+                    return;
                 }
 
-                // 2. Configuration du System Tray (icône barre des tâches)
+                // 2. Initialisation de l'icône de zone de notification
                 InitializeTrayIcon();
 
-                // 3. Lancement de la fenêtre principale de l'application
-                OpenAppWindow();
+                // 3. Lancement de la fenêtre principale de bureau
+                OpenBrowserWindow();
 
-                // Boucle de message de l'application
+                // Gestion propre de la fermeture pour éteindre le serveur embarqué
+                Application.ApplicationExit += (s, e) => StopEmbeddedPhpServer();
+
+                // Boucle Windows Forms
                 Application.Run();
             }
         }
@@ -87,26 +86,21 @@ namespace VerifDoc
                 if (File.Exists(iconPath))
                 {
                     appIcon = new Icon(iconPath);
-                }
-                else
-                {
-                    appIcon = SystemIcons.Shield;
+                    return;
                 }
             }
-            catch
-            {
-                appIcon = SystemIcons.Shield;
-            }
+            catch { }
+            appIcon = SystemIcons.Shield;
         }
 
-        private static bool IsServerOnline()
+        private static bool IsUrlResponding(string url, int timeoutMs = 1500)
         {
             try
             {
-                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(BaseUrl + "/login.php");
+                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url + "/login.php");
                 request.Method = "GET";
-                request.Timeout = 2500;
-                request.ReadWriteTimeout = 2500;
+                request.Timeout = timeoutMs;
+                request.ReadWriteTimeout = timeoutMs;
                 using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
                 {
                     return response.StatusCode == HttpStatusCode.OK;
@@ -118,109 +112,178 @@ namespace VerifDoc
             }
         }
 
-        private static bool ShowSplashAndStartServer()
+        private static int GetAvailablePort(int startingPort)
         {
-            using (Form splash = new Form())
+            for (int port = startingPort; port < startingPort + 50; port++)
             {
-                splash.Text = AppTitle;
-                splash.Size = new Size(460, 240);
-                splash.FormBorderStyle = FormBorderStyle.FixedDialog;
-                splash.StartPosition = FormStartPosition.CenterScreen;
-                splash.MaximizeBox = false;
-                splash.MinimizeBox = false;
-                splash.TopMost = true;
-                splash.Icon = appIcon;
-                splash.BackColor = Color.FromArgb(244, 246, 249);
-
-                Label lblHeader = new Label();
-                lblHeader.Text = "🛡️ Plateforme de Vérification (DGTTC)";
-                lblHeader.Font = new Font("Segoe UI", 12, FontStyle.Bold);
-                lblHeader.ForeColor = Color.FromArgb(255, 122, 0); // Orange VerifDoc
-                lblHeader.Location = new Point(20, 25);
-                lblHeader.AutoSize = true;
-                splash.Controls.Add(lblHeader);
-
-                Label lblStatus = new Label();
-                lblStatus.Text = "Démarrage des services et initialisation du registre...";
-                lblStatus.Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
-                lblStatus.ForeColor = Color.FromArgb(30, 41, 59);
-                lblStatus.Location = new Point(24, 70);
-                lblStatus.Size = new Size(400, 30);
-                splash.Controls.Add(lblStatus);
-
-                ProgressBar progressBar = new ProgressBar();
-                progressBar.Style = ProgressBarStyle.Marquee;
-                progressBar.MarqueeAnimationSpeed = 30;
-                progressBar.Location = new Point(25, 115);
-                progressBar.Size = new Size(395, 24);
-                splash.Controls.Add(progressBar);
-
-                Label lblPort = new Label();
-                lblPort.Text = "Connexion au port 8085 (Docker / Apache / MySQL)...";
-                lblPort.Font = new Font("Segoe UI", 8.5f, FontStyle.Italic);
-                lblPort.ForeColor = Color.FromArgb(100, 116, 139);
-                lblPort.Location = new Point(25, 155);
-                lblPort.AutoSize = true;
-                splash.Controls.Add(lblPort);
-
-                // Lancement du conteneur en tâche de fond
-                bool isReady = false;
-                Thread bgThread = new Thread(() =>
+                try
                 {
+                    TcpListener l = new TcpListener(IPAddress.Loopback, port);
+                    l.Start();
+                    l.Stop();
+                    return port;
+                }
+                catch { }
+            }
+            return startingPort;
+        }
+
+        private static bool EnsureServerRunning()
+        {
+            // Cas 1 : Le serveur Docker ou local tourne déjà sur le port 8085
+            if (IsUrlResponding("http://localhost:8085", 1000))
+            {
+                activeUrl = "http://localhost:8085";
+                return true;
+            }
+
+            // Cas 2 : Aucun serveur n'est actif, lancement du moteur portable embarqué
+            return StartEmbeddedPortableServer();
+        }
+
+        private static bool StartEmbeddedPortableServer()
+        {
+            string appData = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "VerifDoc"
+            );
+            string runtimeDir = Path.Combine(appData, "runtime");
+            string appDir = Path.Combine(appData, "app");
+
+            Directory.CreateDirectory(appData);
+            Directory.CreateDirectory(runtimeDir);
+            Directory.CreateDirectory(appDir);
+
+            // A. Extraction du runtime PHP s'il n'est pas encore présent
+            string phpExe = Path.Combine(runtimeDir, "php-win.exe");
+            if (!File.Exists(phpExe))
+            {
+                phpExe = Path.Combine(runtimeDir, "php.exe");
+            }
+
+            if (!File.Exists(phpExe))
+            {
+                ExtractResource("php_runtime.zip", Path.Combine(appData, "php_runtime.zip"));
+                try
+                {
+                    ZipFile.ExtractToDirectory(Path.Combine(appData, "php_runtime.zip"), runtimeDir);
+                    File.Delete(Path.Combine(appData, "php_runtime.zip"));
+                }
+                catch { }
+
+                phpExe = Path.Combine(runtimeDir, "php-win.exe");
+                if (!File.Exists(phpExe))
+                {
+                    phpExe = Path.Combine(runtimeDir, "php.exe");
+                }
+            }
+
+            // B. Détermination du dossier source des fichiers PHP/Web
+            string currentBase = AppDomain.CurrentDomain.BaseDirectory;
+            string webRoot = currentBase;
+
+            // Si VerifDoc.exe a été déplacé seul sans les fichiers web autour, on extrait l'application embarquée
+            if (!File.Exists(Path.Combine(currentBase, "login.php")) || !File.Exists(Path.Combine(currentBase, "verifier.php")))
+            {
+                webRoot = appDir;
+                string testMarker = Path.Combine(appDir, "login.php");
+                if (!File.Exists(testMarker))
+                {
+                    string zipApp = Path.Combine(appData, "web_app.zip");
+                    ExtractResource("web_app.zip", zipApp);
                     try
                     {
-                        ProcessStartInfo psi = new ProcessStartInfo();
-                        psi.FileName = "docker-compose";
-                        psi.Arguments = "up -d";
-                        psi.WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory;
-                        psi.WindowStyle = ProcessWindowStyle.Hidden;
-                        psi.CreateNoWindow = true;
-                        psi.UseShellExecute = false;
-
-                        Process p = Process.Start(psi);
-                        if (p != null)
-                        {
-                            p.WaitForExit(15000);
-                        }
+                        ZipFile.ExtractToDirectory(zipApp, appDir);
+                        File.Delete(zipApp);
                     }
                     catch { }
+                }
+            }
 
-                    // Attente active jusqu'à ce que le serveur réponde
-                    for (int i = 0; i < 30; i++)
+            // C. Attribution d'un port local libre
+            int localPort = GetAvailablePort(8085);
+            activeUrl = "http://127.0.0.1:" + localPort;
+
+            // D. Démarrage du serveur PHP intégré
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = phpExe;
+                psi.Arguments = string.Format("-c \"{0}\" -S 127.0.0.1:{1} -t \"{2}\"",
+                    Path.Combine(runtimeDir, "php.ini"),
+                    localPort,
+                    webRoot
+                );
+                psi.WorkingDirectory = webRoot;
+                psi.WindowStyle = ProcessWindowStyle.Hidden;
+                psi.CreateNoWindow = true;
+                psi.UseShellExecute = false;
+
+                phpServerProcess = Process.Start(psi);
+
+                // Attente de démarrage (jusqu'à 5 secondes)
+                for (int i = 0; i < 20; i++)
+                {
+                    if (IsUrlResponding(activeUrl, 300))
                     {
-                        if (IsServerOnline())
-                        {
-                            isReady = true;
-                            break;
-                        }
-                        Thread.Sleep(1000);
+                        return true;
                     }
+                    Thread.Sleep(250);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Erreur au lancement du serveur embarqué : " + ex.Message);
+            }
 
-                    if (splash.InvokeRequired)
-                    {
-                        splash.BeginInvoke(new Action(() => splash.Close()));
-                    }
-                    else
-                    {
-                        splash.Close();
-                    }
-                });
+            return IsUrlResponding(activeUrl, 1000);
+        }
 
-                bgThread.IsBackground = true;
-                bgThread.Start();
+        private static void ExtractResource(string resourceName, string targetPath)
+        {
+            Assembly asm = Assembly.GetExecutingAssembly();
+            string[] names = asm.GetManifestResourceNames();
+            string match = null;
 
-                splash.ShowDialog();
-                return isReady || IsServerOnline();
+            foreach (string n in names)
+            {
+                if (n.EndsWith(resourceName, StringComparison.OrdinalIgnoreCase))
+                {
+                    match = n;
+                    break;
+                }
+            }
+
+            if (match == null) return;
+
+            using (Stream s = asm.GetManifestResourceStream(match))
+            {
+                if (s == null) return;
+                using (FileStream fs = new FileStream(targetPath, FileMode.Create, FileAccess.Write))
+                {
+                    s.CopyTo(fs);
+                }
             }
         }
 
-        private static void OpenAppWindow(string path = "")
+        private static void StopEmbeddedPhpServer()
         {
-            string url = BaseUrl + (string.IsNullOrEmpty(path) ? "" : "/" + path.TrimStart('/'));
+            if (phpServerProcess != null && !phpServerProcess.HasExited)
+            {
+                try
+                {
+                    phpServerProcess.Kill();
+                }
+                catch { }
+            }
+        }
+
+        private static void OpenBrowserWindow(string path = "")
+        {
+            string url = activeUrl + (string.IsNullOrEmpty(path) ? "" : "/" + path.TrimStart('/'));
 
             try
             {
-                // Trouver le chemin d'Edge ou Chrome pour lancer le mode Application autonome (sans barre d'adresse)
                 string edgePath = @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe";
                 if (!File.Exists(edgePath))
                 {
@@ -254,22 +317,16 @@ namespace VerifDoc
                     psi.Arguments = args;
                     psi.UseShellExecute = false;
 
-                    browserProcess = Process.Start(psi);
+                    Process.Start(psi);
                 }
                 else
                 {
-                    // Navigateur système par défaut si ni Edge ni Chrome n'est trouvé
                     Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
-                    "Erreur lors de l'ouverture de l'application :\n" + ex.Message,
-                    "VerifDoc",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error
-                );
+                MessageBox.Show("Erreur lors de l'ouverture de l'application : " + ex.Message, AppTitle);
             }
         }
 
@@ -277,70 +334,34 @@ namespace VerifDoc
         {
             ContextMenu contextMenu = new ContextMenu();
 
-            MenuItem itemOpen = new MenuItem("🛡️ Ouvrir VerifDoc", (s, e) => OpenAppWindow());
-            itemOpen.DefaultItem = true; // Double-clic par défaut
+            MenuItem itemOpen = new MenuItem("🛡️ Ouvrir VerifDoc", (s, e) => OpenBrowserWindow());
+            itemOpen.DefaultItem = true;
             contextMenu.MenuItems.Add(itemOpen);
 
-            contextMenu.MenuItems.Add(new MenuItem("🔍 Vérifier un document", (s, e) => OpenAppWindow("verifier.php")));
-            contextMenu.MenuItems.Add(new MenuItem("📋 Journal d'audit", (s, e) => OpenAppWindow("historique.php")));
-            contextMenu.MenuItems.Add(new MenuItem("➕ Nouveau document", (s, e) => OpenAppWindow("ajouter_document.php")));
-            contextMenu.MenuItems.Add(new MenuItem("👑 Espace Administrateur", (s, e) => OpenAppWindow("admin.php")));
+            contextMenu.MenuItems.Add(new MenuItem("🔍 Vérifier un document", (s, e) => OpenBrowserWindow("verifier.php")));
+            contextMenu.MenuItems.Add(new MenuItem("📋 Journal d'audit", (s, e) => OpenBrowserWindow("historique.php")));
+            contextMenu.MenuItems.Add(new MenuItem("➕ Nouveau document", (s, e) => OpenBrowserWindow("ajouter_document.php")));
+            contextMenu.MenuItems.Add(new MenuItem("👑 Espace Administrateur", (s, e) => OpenBrowserWindow("admin.php")));
 
-            contextMenu.MenuItems.Add("-"); // Séparateur
-
-            contextMenu.MenuItems.Add(new MenuItem("🔄 Redémarrer les services", (s, e) =>
-            {
-                try
-                {
-                    ProcessStartInfo psi = new ProcessStartInfo("docker-compose", "restart");
-                    psi.WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory;
-                    psi.WindowStyle = ProcessWindowStyle.Hidden;
-                    psi.CreateNoWindow = true;
-                    Process.Start(psi);
-
-                    trayIcon.ShowBalloonTip(3000, "VerifDoc", "Redémarrage des services Docker en cours...", ToolTipIcon.Info);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show("Erreur : " + ex.Message);
-                }
-            }));
-
-            contextMenu.MenuItems.Add(new MenuItem("🛑 Arrêter les conteneurs", (s, e) =>
-            {
-                try
-                {
-                    ProcessStartInfo psi = new ProcessStartInfo("docker-compose", "down");
-                    psi.WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory;
-                    psi.WindowStyle = ProcessWindowStyle.Hidden;
-                    psi.CreateNoWindow = true;
-                    Process.Start(psi);
-
-                    trayIcon.ShowBalloonTip(3000, "VerifDoc", "Arrêt des conteneurs en cours...", ToolTipIcon.Info);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show("Erreur : " + ex.Message);
-                }
-            }));
-
-            contextMenu.MenuItems.Add("-"); // Séparateur
+            contextMenu.MenuItems.Add("-");
 
             contextMenu.MenuItems.Add(new MenuItem("❌ Quitter VerifDoc", (s, e) =>
             {
-                trayIcon.Visible = false;
+                if (trayIcon != null)
+                {
+                    trayIcon.Visible = false;
+                }
+                StopEmbeddedPhpServer();
                 Application.Exit();
             }));
 
             trayIcon = new NotifyIcon();
-            trayIcon.Text = "VerifDoc - Plateforme de Vérification (DGTTC)";
+            trayIcon.Text = AppTitle;
             trayIcon.Icon = appIcon;
             trayIcon.ContextMenu = contextMenu;
             trayIcon.Visible = true;
 
-            trayIcon.DoubleClick += (s, e) => OpenAppWindow();
-
-            trayIcon.ShowBalloonTip(2500, "VerifDoc", "L'application est active et connectée au serveur.", ToolTipIcon.Info);
+            trayIcon.DoubleClick += (s, e) => OpenBrowserWindow();
         }
     }
 }
